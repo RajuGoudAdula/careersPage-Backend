@@ -1,6 +1,7 @@
 import OTPVerification from "../models/OTPVerification.js";
 import jobAlert from "../models/Alert.js";
 import nodemailer from "nodemailer";
+import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 
 // SEND OTP
@@ -10,6 +11,7 @@ export const sendOTP = async (req, res) => {
 
     if (!email) return res.status(400).json({ message: "Email is required" });
 
+    
     // Generate 6-digit OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
@@ -17,11 +19,19 @@ export const sendOTP = async (req, res) => {
     const hashedOtp = await bcrypt.hash(otp, 10);
 
     // Save to DB
-    await OTPVerification.create({
-      email,
-      otp: hashedOtp,
-      expiresAt: new Date(Date.now() + 5 * 60 * 1000), // expires in 5 minutes
-    });
+    await OTPVerification.findOneAndUpdate(
+      { email }, // find by email
+      {
+        otp: hashedOtp,
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+        verified: false,
+      },
+      {
+        upsert: true,     // create if not exists
+        new: true,
+        setDefaultsOnInsert: true,
+      }
+    );
 
     // Configure Nodemailer
     const transporter = nodemailer.createTransport({
@@ -51,48 +61,113 @@ export const sendOTP = async (req, res) => {
 
 
 // VERIFY OTP
+
 export const verifyOTP = async (req, res) => {
   try {
     const { email, otp } = req.body;
 
-    console.log({ email, otp });
+    if (!email || !otp) {
+      return res.status(400).json({ message: "Email and OTP required",verified: false });
+    }
 
-    if (!email || !otp)
-      return res.status(400).json({ message: "Email and OTP required" });
+    // 1️⃣ Find OTP record
+    const record = await OTPVerification.findOne({ email });
 
-    // Get latest OTP entry for this email
-    const record = await OTPVerification.findOne({ email }).sort({ createdAt: -1 });
+    if (!record) {
+      return res.status(400).json({
+        message: "OTP expired or not found. Please request again.",
+        verified: false,
+      });
+    }
 
-    if (!record)
-      return res.status(400).json({ message: "No OTP found. Please request again." });
+    // 2️⃣ Check expiry
+    if (record.expiresAt < new Date()) {
+      await OTPVerification.deleteOne({ email });
+      return res.status(400).json({ message: "OTP expired",verified: false });
+    }
 
-    // Compare
+    // 3️⃣ Compare OTP
     const isMatch = await bcrypt.compare(otp, record.otp);
 
-    if (!isMatch)
-      return res.status(400).json({ message: "Invalid OTP" });
+    if (!isMatch) {
+      return res.status(400).json({ message: "Invalid OTP",verified: false });
+    }
 
-    // Mark verified
-    record.verified = true;
-    await record.save();
+    // 4️⃣ OTP verified → delete it
+    await OTPVerification.deleteOne({ email });
 
-    return res.status(200).json({ message: "OTP verified successfully", verified: true });
+    // 5️⃣ Generate verification JWT (IMPORTANT)
+    const verificationToken = jwt.sign(
+      {
+        email,
+        purpose: "OTP_VERIFIED",
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "10m" } // short-lived token
+    );
+
+    return res.status(200).json({
+      message: "OTP verified successfully",
+      verified: true,
+      verificationToken, // 👈 send to frontend
+    });
 
   } catch (err) {
-    return res.status(500).json({ message: "Verification failed", error: err.message });
+    console.error("Verify OTP Error:", err);
+    return res.status(500).json({
+      message: "Verification failed",
+      verified: false
+    });
   }
 };
 
+
+
+
 export const handleAlertSubmit = async (req, res) => {
   try {
-    const { email, experience, frequency, keywords, name, location, otherLocation } = req.body;
+    const { email, experience, frequency, keywords, name, location, otherLocation ,verificationToken} = req.body;
 
-    // Check OTP verification entry
-    const verified = await OTPVerification.findOne({ email, verified: true });
+    
+  // 1️⃣ Token must be present
+  if (!verificationToken) {
+    return res.status(401).json({
+      success: false,
+      message: "Email verification required",
+    });
+  }
 
-    if (!verified) {
-      return res.status(400).json({ success: false, message: "Please verify OTP first" });
-    }
+  let decoded;
+
+  try {
+    // 2️⃣ Verify JWT
+    decoded = jwt.verify(
+      verificationToken,
+      process.env.JWT_SECRET
+    );
+  } catch (err) {
+    return res.status(401).json({
+      success: false,
+      message: "Invalid or expired verification token",
+    });
+  }
+
+  // 3️⃣ Validate token purpose
+  if (decoded.purpose !== "OTP_VERIFIED") {
+    return res.status(403).json({
+      success: false,
+      message: "Invalid verification token purpose",
+    });
+  }
+
+  // 4️⃣ Email consistency check (IMPORTANT)
+  if (decoded.email !== email) {
+    return res.status(403).json({
+      success: false,
+      message: "Verification token does not match email",
+    });
+  }
+
 
     // Create alert record
     const alert = new jobAlert({
@@ -225,6 +300,153 @@ export const getContactForm = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Internal server error. Please try again.",
+    });
+  }
+};
+
+
+export const updateAlert = async (req, res) => {
+  try {
+    const { alertId } = req.params;
+    const payload = req.body;
+
+    if (!alertId) {
+      return res.status(400).json({
+        success: false,
+        message: "Alert ID is required",
+      });
+    }
+
+    // 1️⃣ Find existing alert
+    const alert = await jobAlert.findById(alertId);
+
+    if (!alert) {
+      return res.status(404).json({
+        success: false,
+        message: "Alert not found",
+      });
+    }
+
+    /* ------------------------------------------------
+       2️⃣ EMAIL UPDATE + VERIFICATION TOKEN CHECK
+    ------------------------------------------------ */
+
+    const emailChanged =
+      payload.email && payload.email !== alert.email;
+
+    if (emailChanged) {
+      const { verificationToken } = payload;
+
+      if (!verificationToken) {
+        return res.status(401).json({
+          success: false,
+          message: "Email verification required",
+        });
+      }
+
+      let decoded;
+      try {
+        decoded = jwt.verify(
+          verificationToken,
+          process.env.JWT_SECRET
+        );
+      } catch (err) {
+        return res.status(401).json({
+          success: false,
+          message: "Invalid or expired verification token",
+        });
+      }
+
+      // 🔐 Validate token purpose
+      if (decoded.purpose !== "OTP_VERIFIED") {
+        return res.status(403).json({
+          success: false,
+          message: "Invalid verification token",
+        });
+      }
+
+      // 🔐 Ensure token email matches new email
+      if (decoded.email !== payload.email) {
+        return res.status(403).json({
+          success: false,
+          message: "Verification token does not match email",
+        });
+      }
+
+      // ✅ Safe to update email
+      alert.email = payload.email.toLowerCase();
+      alert.verified = true;
+    }
+
+    /* ------------------------------------------------
+       3️⃣ UPDATE OTHER FIELDS
+    ------------------------------------------------ */
+
+    if (payload.name !== undefined)
+      alert.name = payload.name;
+
+    if (payload.keywords !== undefined) {
+      alert.keywords = Array.isArray(payload.keywords)
+        ? payload.keywords.join(", ")
+        : payload.keywords;
+    }
+
+    if (payload.experience !== undefined)
+      alert.experience = payload.experience;
+
+    if (payload.location !== undefined)
+      alert.location = payload.location;
+
+    if (payload.frequency !== undefined)
+      alert.frequency = payload.frequency;
+
+    // 4️⃣ Save
+    await alert.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Alert updated successfully",
+    });
+
+  } catch (error) {
+    console.error("Update Alert Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+};
+
+export const deleteAlert = async (req, res) => {
+  try {
+    const { alertId } = req.params;
+
+    if (!alertId) {
+      return res.status(400).json({
+        success: false,
+        message: "Alert ID is required",
+      });
+    }
+
+    const alert = await jobAlert.findById(alertId);
+    if (!alert) {
+      return res.status(404).json({
+        success: false,
+        message: "Alert not found",
+      });
+    }
+
+    await jobAlert.findByIdAndDelete(alertId);
+
+    return res.status(200).json({
+      success: true,
+      message: "Alert deleted successfully",
+    });
+  } catch (error) {
+    console.error("Error deleting alert:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while deleting alert",
     });
   }
 };
