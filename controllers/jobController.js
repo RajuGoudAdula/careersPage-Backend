@@ -2,15 +2,25 @@ import Job from "../models/Job.js";
 import Company from "../models/Company.js";
 import dayjs from "dayjs";
 import relativeTime from "dayjs/plugin/relativeTime.js";
+import { triggerN8nJobAutomation } from "../services/n8n.service.js";
+import { processJobAlerts } from "../jobs/job.alert.processor.js";
 dayjs.extend(relativeTime);
+
 
 export const postNewJobOfCompany = async (req, res) => {
   try {
     const { companyId } = req.params;
-    console.log(req.body);
-    const { title, location, experience, link ,salary,description,jobType} = req.body;
+    const {
+      title,
+      location,
+      experience,
+      link, 
+      salary,
+      description,
+      jobType,
+    } = req.body;
 
-    // Validate companyId
+    // 1️⃣ Validate companyId
     if (!companyId.match(/^[0-9a-fA-F]{24}$/)) {
       return res.status(400).json({
         success: false,
@@ -18,16 +28,16 @@ export const postNewJobOfCompany = async (req, res) => {
       });
     }
 
-    // Check if company exists
-    const companyExists = await Company.findById(companyId);
-    if (!companyExists) {
+    // 2️⃣ Check company exists
+    const company = await Company.findById(companyId).lean();
+    if (!company) {
       return res.status(404).json({
         success: false,
         message: "Company not found",
       });
     }
 
-    // Create job
+    // 3️⃣ Create job (SOURCE OF TRUTH)
     const newJob = await Job.create({
       title,
       location,
@@ -37,20 +47,30 @@ export const postNewJobOfCompany = async (req, res) => {
       description,
       jobType,
       company: companyId,
-      createdBy: req.adminId   // from middleware
+      createdBy: req.adminId,
     });
 
+    setImmediate(() => {
+      processJobAlerts(newJob?._id);
+    });
+
+    // 4️⃣ Trigger n8n (NON-BLOCKING SIDE EFFECT)
+    triggerN8nJobAutomation({
+      job: newJob,
+      company,
+    });
+
+    // 5️⃣ Respond immediately
     return res.status(201).json({
       success: true,
       message: "Job created successfully",
-      job: newJob
+      job: newJob,
     });
-
-  } catch (err) {
-    console.error(err);
+  } catch (error) {
+    console.error("Job creation failed:", error);
     return res.status(500).json({
       success: false,
-      error: err.message,
+      message: "Internal server error",
     });
   }
 };
@@ -160,10 +180,12 @@ export const getCompanyJobs = async (req, res) => {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
+      .populate("company", "companyName")
       .select("title location experience jobType salary description link createdAt");
 
     // Map jobs to remove _id and format createdAt
     const jobs = jobsRaw.map(job => ({
+      _id: job._id,
       title: job.title,
       location: job.location,
       experience: job.experience,
@@ -171,6 +193,7 @@ export const getCompanyJobs = async (req, res) => {
       salary: job.salary,
       description: job.description,
       link: job.link,
+      companyName: job.company?.companyName || "",
       postedOn: dayjs(job.createdAt).fromNow(), // relative time
     }));
 
@@ -289,5 +312,25 @@ export const getJobs = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Search failed" });
+  }
+};
+
+export const getJobDetails = async (req, res) => {
+  const { jobId } = req.params;
+
+  try {
+    
+    const job = await Job.findById(jobId)
+      .populate("company", "companyName logo") 
+      .exec();
+
+    if (!job) {
+      return res.status(404).json({ message: "Job not found" });
+    }
+
+    res.status(200).json(job);
+  } catch (err) {
+    console.error("Error fetching job details:", err);
+    res.status(500).json({ message: "Server error" });
   }
 };

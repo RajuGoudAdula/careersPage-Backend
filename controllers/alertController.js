@@ -3,10 +3,19 @@ import jobAlert from "../models/Alert.js";
 import nodemailer from "nodemailer";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
+import { sendOtpEmail } from "../emails/sendEmail.js";
+import webPush from "web-push";
+
+webPush.setVapidDetails(
+  `mailto:${process.env.EMAIL_USER}`,
+  process.env.VAPID_PUBLIC_KEY,
+  process.env.VAPID_PRIVATE_KEY
+);
 
 // SEND OTP
 export const sendOTP = async (req, res) => {
   try {
+    console.log("Sending");
     const { email } = req.body;
 
     if (!email) return res.status(400).json({ message: "Email is required" });
@@ -33,28 +42,16 @@ export const sendOTP = async (req, res) => {
       }
     );
 
-    // Configure Nodemailer
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      }
-    });
-
-    const mailOptions = {
-      from: "Job Alert System <no-reply@jobalert.com>",
+    await sendOtpEmail({
       to: email,
-      subject: "Your Job Alert OTP",
-      html: `<h3>Your OTP is: <b>${otp}</b></h3>
-             <p>Valid for 5 minutes only.</p>`
-    };
-
-    await transporter.sendMail(mailOptions);
+      name: "",          
+      otp
+    });
 
     return res.status(200).json({ message: "OTP sent successfully" });
 
   } catch (error) {
+    console.log(error)
     return res.status(500).json({ message: "Failed to send OTP", error: error.message });
   }
 };
@@ -386,9 +383,7 @@ export const updateAlert = async (req, res) => {
       alert.name = payload.name;
 
     if (payload.keywords !== undefined) {
-      alert.keywords = Array.isArray(payload.keywords)
-        ? payload.keywords.join(", ")
-        : payload.keywords;
+      alert.keywords = payload.keywords;
     }
 
     if (payload.experience !== undefined)
@@ -448,5 +443,47 @@ export const deleteAlert = async (req, res) => {
       success: false,
       message: "Server error while deleting alert",
     });
+  }
+};
+
+
+
+/**
+ * Save browser push subscription for an alert and optionally send a notification
+ */
+export const addBrowserNotification = async (req, res) => {
+  try {
+    const { alertId, subscription } = req.body;
+
+    if (!alertId || !subscription) {
+      return res.status(400).json({ message: "alertId and subscription are required" });
+    }
+
+    // Find the alert by ID
+    const alert = await jobAlert.findById(alertId);
+    if (!alert) {
+      return res.status(404).json({ message: "Alert not found" });
+    }
+
+    // Save subscription to the alert
+    alert.pushSubscription = subscription;
+    await alert.save();
+
+    // Optional: Send a test notification immediately
+    const payload = JSON.stringify({
+      title: "Alert Saved!",
+      body: "You will now receive notifications for this alert.",
+    });
+
+    try {
+      await webPush.sendNotification(subscription, payload);
+    } catch (err) {
+      console.warn("Failed to send test notification:", err.message);
+    }
+
+    return res.status(200).json({ message: "Subscription saved successfully", alert });
+  } catch (error) {
+    console.error("Error in addBrowserNotification:", error);
+    return res.status(500).json({ message: "Internal server error" });
   }
 };

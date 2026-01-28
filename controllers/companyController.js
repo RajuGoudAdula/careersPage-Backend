@@ -1,8 +1,27 @@
 import Company from "../models/Company.js";
 import Job from "../models/Job.js";
 import dayjs from "dayjs";
+import axios from "axios";
+import * as cheerio from "cheerio";
 import relativeTime from "dayjs/plugin/relativeTime.js";
 dayjs.extend(relativeTime);
+
+
+async function fetchWebsiteText(url) {
+  const { data: html } = await axios.get(url, {
+    timeout: 10000,
+    headers: { "User-Agent": "Mozilla/5.0" }
+  });
+
+  const $ = cheerio.load(html);
+
+  // Remove noise
+  $("script, style, noscript").remove();
+
+  const text = $("body").text().replace(/\s+/g, " ").trim();
+  return text.slice(0, 15000); // IMPORTANT: token limit safety
+}
+
 
 export const createCompany = async (req, res) => {
   try {
@@ -49,6 +68,62 @@ export const createCompany = async (req, res) => {
     });
   }
 };
+
+
+export const autoFillCompany = async (req, res) => {
+  try {
+    const { websiteUrl } = req.body;
+    if (!websiteUrl) {
+      return res.status(400).json({ message: "Website URL is required" });
+    }
+
+    const websiteText = await fetchWebsiteText(websiteUrl);
+
+    if (!websiteText) {
+      return res.status(400).json({ message: "Unable to fetch website content" });
+    }
+
+    const prompt = `
+      Extract company details from the following website content.
+      Return ONLY valid JSON.
+
+      Fields:
+      companyName, logo, favicon, careersPage, description, industry,
+      headquarters, companySize, atsUsed, contactEmail
+
+      Rules:
+      - If unknown, return ""
+      - Do NOT guess
+      - Use only provided content
+      - No explanations
+      - No markdown
+
+      Website Content:
+      ${websiteText}
+      `;
+
+    const aiOutput = await geminiChat(prompt);
+
+    let aiData;
+    try {
+      aiData = JSON.parse(aiOutput);
+    } catch {
+      console.error("Gemini raw output:", aiOutput);
+      return res.status(500).json({ message: "Invalid AI JSON" });
+    }
+
+    res.status(200).json({
+      message: "Company details generated",
+      data: aiData
+    });
+
+  } catch (err) {
+    console.error("AutoFill Error:", err);
+    res.status(500).json({ message: "Server Error" });
+  }
+};
+
+
 
 
 export const getCompanies = async (req, res) => {

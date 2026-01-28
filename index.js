@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import connectDB from "./config/db.js";
+import "./cron/email.cron.js";
 
 import adminRoutes from "./routes/authRoutes.js";
 import jobRoutes from "./routes/jobRoutes.js";

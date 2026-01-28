@@ -15,10 +15,16 @@ const AlertSchema = new mongoose.Schema(
     },
 
     keywords: {
-      type: [String], // stored as array for better querying
+      type: [
+        {
+          label: { type: String },
+          value: { type: String },
+          type: { type: String, enum: ["role", "tech", "area"] },
+        }
+      ],
       default: [],
-      index: true,
     },
+    
 
     experience: {
       type: String,
@@ -37,12 +43,6 @@ const AlertSchema = new mongoose.Schema(
       default: "daily",
     },
 
-    status: {
-      type: String,
-      enum: ["active", "paused"],
-      default: "active",
-      index: true,
-    },
 
     verified: {
       type: Boolean,
@@ -53,6 +53,13 @@ const AlertSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
       index: true,
+    },
+    
+    lastNotifiedAt: {
+      type: Date,
+    },
+    pushSubscription: {
+      type: Object
     },
   },
   {
