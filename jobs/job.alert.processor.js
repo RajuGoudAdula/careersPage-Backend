@@ -31,7 +31,7 @@ export async function processJobAlerts(jobId) {
     // 3️⃣ Fuzzy matching + browser notification
     for (const alert of alerts) {
       if (isJobMatched(job, alert)) {
-        await sendBrowserNotification(alert.pushSubscription, job);
+        await sendBrowserNotification(alert?.pushSubscription, job);
       }
     }
   } catch (err) {

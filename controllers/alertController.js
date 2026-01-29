@@ -20,6 +20,7 @@ export const sendOTP = async (req, res) => {
 
     if (!email) return res.status(400).json({ message: "Email is required" });
 
+
     
     // Generate 6-digit OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -93,6 +94,7 @@ export const verifyOTP = async (req, res) => {
     // 4️⃣ OTP verified → delete it
     await OTPVerification.deleteOne({ email });
 
+
     // 5️⃣ Generate verification JWT (IMPORTANT)
     const verificationToken = jwt.sign(
       {
@@ -102,6 +104,16 @@ export const verifyOTP = async (req, res) => {
       process.env.JWT_SECRET,
       { expiresIn: "10m" } // short-lived token
     );
+
+    const isAlert = await jobAlert.findOne({email : email});
+
+    if(isAlert){
+      return res.status(201).json({
+        success: true,
+        message: "Job Alert already created by this email.",
+        alertId: isAlert._id,
+      });
+    }
 
     return res.status(200).json({
       message: "OTP verified successfully",
@@ -162,6 +174,16 @@ export const handleAlertSubmit = async (req, res) => {
     return res.status(403).json({
       success: false,
       message: "Verification token does not match email",
+    });
+  }
+
+  const isAlert = await jobAlert.findOne({email : email});
+
+  if(isAlert){
+    return res.status(201).json({
+      success: true,
+      message: "Job Alert already created by this email.",
+      alertId: isAlert._id,
     });
   }
 
