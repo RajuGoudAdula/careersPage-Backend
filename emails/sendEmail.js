@@ -20,18 +20,26 @@ const SENDER = {
 
 /* ------------------ Job Alert Email ------------------ */
 
-export const sendJobAlertEmail = async ({ to, name, job }) => {
-  const content = jobAlertTemplate({ name, job });
+export const sendJobAlertEmail = async ({ to, name, jobs }) => {
+  const content = jobAlertTemplate({ name, jobs });
 
-  const html = renderTemplate({
-    title: `${job.company} Careers: ${job.title}`,
-    template: content,
-  });
+  const title = jobs?.length > 1
+      ? `${jobs?.length} Verified Jobs Matching Your Profile | CareersPage`
+      : `New Job Alert: ${jobs[0]?.title} at ${jobs[0]?.company?.companyName}`;
+
+    const html = renderTemplate({
+      title,
+      template: content, // your HTML from jobAlertTemplate
+    });
+
+    const subject = jobs.length > 1
+    ? `Top ${jobs.length} Verified Job Opportunities for You | CareersPage`
+    : `Exclusive Job Alert: ${jobs[0]?.title} at ${jobs[0]?.company?.companyName}`;
 
   await emailApi.sendTransacEmail({
     sender: SENDER,
     to: [{ email: to }],
-    subject: `${job.company} Careers: ${job.title}`,
+    subject,
     htmlContent: html,
   });
 };

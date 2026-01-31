@@ -22,7 +22,10 @@ export const triggerN8nJobAutomation = async ({ job, company }) => {
         createdAt: job.createdAt,
       },
       {
-        timeout: 3000, // ⏱ prevent hanging
+        headers: {
+          "Content-Type": "application/json",
+          "X-WEBHOOK-SECRET": "cp_9FqL7XwA3MZK2eH6R8VYtB5JmU0nDCSx4iPoGa1W",
+        },
       }
     );
   } catch (error) {
