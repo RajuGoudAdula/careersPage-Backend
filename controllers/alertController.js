@@ -494,7 +494,7 @@ export const addBrowserNotification = async (req, res) => {
     // Optional: Send a test notification immediately
     const payload = JSON.stringify({
       title: "Alert Saved!",
-      body: "You will now receive notifications for this alert.",
+      body: "Success! You'll get notified as soon as new jobs match your alert.",
     });
 
     try {

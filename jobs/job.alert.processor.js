@@ -1,4 +1,5 @@
 import {sendBrowserNotification} from "../notifications/push.service.js"
+import Job from "../models/Job.js";
 
 export async function processJobAlerts(jobId) {
   try {
