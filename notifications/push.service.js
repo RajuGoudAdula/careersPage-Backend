@@ -8,25 +8,62 @@ webpush.setVapidDetails(
 
 export async function sendBrowserNotification(subscription, job) {
   if (!subscription) {
+    console.warn("No push subscription found");
     return { success: false, reason: "NO_SUBSCRIPTION" };
   }
 
+  // 🔒 Validate subscription shape
+  if (
+    !subscription.endpoint ||
+    !subscription.keys?.p256dh ||
+    !subscription.keys?.auth
+  ) {
+    console.error("Invalid push subscription format", subscription);
+    return { success: false, reason: "INVALID_SUBSCRIPTION_FORMAT" };
+  }
+
   const payload = JSON.stringify({
-    title: "New Job Match 🎯",
-    body: job.title,
-    url: job.link,
+    title: `New Job at  ${job.companyName}`,
+    body: `${job.title} at ${job.companyName}`,
+    image: job.companyLogo || "/images/job-banner.png", // large image (optional)
+    
+    data: {
+      url: `${process.env.FRONTEND_URL}/jobs/${job?._id}`,                     // where to open on click
+      jobId: job._id,
+      companyId: job.companyId,
+    },
+  
+    actions: [
+      {
+        action: "view",
+        title: "View Job",
+      },
+      {
+        action: "save",
+        title: "Save",
+      }
+    ],
+  
+    tag: `job-${job._id}`,                // prevents duplicate notifications
+    renotify: true,                       // notify again if same tag
+    requireInteraction: true,             // stays until user interacts
+    silent: false,                        // play sound
+    timestamp: Date.now(),
   });
+  
 
   try {
-    await webpush.sendNotification(subscription, payload);
+    await webpush.sendNotification(subscription, payload, {
+      TTL: 3600,
+      urgency: "high",
+    });
+
     return { success: true };
   } catch (err) {
     const statusCode = err?.statusCode;
 
-    // 🔥 Subscription is no longer valid → delete from DB
     if (statusCode === 410 || statusCode === 404) {
       console.warn("Push subscription expired or invalid");
-
       return {
         success: false,
         reason: "INVALID_SUBSCRIPTION",
@@ -34,19 +71,12 @@ export async function sendBrowserNotification(subscription, job) {
       };
     }
 
-    // 🔐 Auth / VAPID issues
     if (statusCode === 401 || statusCode === 403) {
       console.error("VAPID or authorization error");
-
-      return {
-        success: false,
-        reason: "AUTH_ERROR",
-      };
+      return { success: false, reason: "AUTH_ERROR" };
     }
 
-    // 🌐 Network / unknown error
     console.error("Push failed:", err.message);
-
     return {
       success: false,
       reason: "UNKNOWN_ERROR",

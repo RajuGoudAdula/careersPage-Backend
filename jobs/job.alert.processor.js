@@ -1,21 +1,17 @@
-import Alert from "../models/Alert.js";
-import Job from "../models/Job.js";
-import { isJobMatched } from "../alerts/alert.matcher.js";
-import { sendBrowserNotification } from "../notifications/push.service.js";
+import {sendBrowserNotification} from "../notifications/push.service.js"
 
 export async function processJobAlerts(jobId) {
   try {
-    // 1️⃣ Load job with company populated
     const job = await Job.findById(jobId)
       .populate("company", "companyName")
       .lean();
 
     if (!job) return;
 
-    // 2️⃣ Pre-filter alerts (indexed fields only)
     const alerts = await Alert.find({
       deleted: false,
       verified: true,
+      pushSubscription: { $exists: true },
       $or: [
         {
           location: {
@@ -24,14 +20,21 @@ export async function processJobAlerts(jobId) {
         },
         { location: { $exists: false } },
       ],
-    }).lean();
-    
+    });
 
-
-    // 3️⃣ Fuzzy matching + browser notification
     for (const alert of alerts) {
-      if (isJobMatched(job, alert)) {
-        await sendBrowserNotification(alert?.pushSubscription, job);
+      if (!isJobMatched(job, alert)) continue;
+
+      const result = await sendBrowserNotification(
+        alert.pushSubscription,
+        job
+      );
+
+      if (result?.shouldDelete) {
+        await Alert.updateOne(
+          { _id: alert._id },
+          { $unset: { pushSubscription: "" } }
+        );
       }
     }
   } catch (err) {
