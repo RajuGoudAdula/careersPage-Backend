@@ -1,5 +1,7 @@
-import {sendBrowserNotification} from "../notifications/push.service.js"
+import {sendBrowserNotification} from "../notifications/push.service.js";
+import {isJobMatched} from "../alerts/alert.matcher.js";
 import Job from "../models/Job.js";
+import Alert from "../models/Alert.js";
 
 export async function processJobAlerts(jobId) {
   try {
