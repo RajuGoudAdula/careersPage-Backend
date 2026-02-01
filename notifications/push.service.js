@@ -23,9 +23,9 @@ export async function sendBrowserNotification(subscription, job) {
   }
 
   const payload = JSON.stringify({
-    title: `New Job at ${job.companyName}`,
-    body: `${job.title} at ${job.companyName}`,
-    image: job.companyLogo || "/images/job-banner.png", // large image (optional)
+    title: `New Job at ${job.company.companyName}`,
+    body: `${job.title} at ${job.company.companyName}`,
+    image: job.company.logo || "/images/job-banner.png", // large image (optional)
     
     data: {
       url: `${process.env.FRONTEND_URL}/jobs/${job._id}`, // where to open on click
@@ -52,7 +52,7 @@ export async function sendBrowserNotification(subscription, job) {
     });
 
     // ✅ Log success
-    console.log(`Push notification sent successfully for job: ${job.title} at ${job.companyName}`);
+    console.log(`Push notification sent successfully for job: ${job.title} at ${job?.company?.companyName}`);
 
     return { success: true };
   } catch (err) {

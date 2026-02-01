@@ -6,7 +6,7 @@ import Alert from "../models/Alert.js";
 export async function processJobAlerts(jobId) {
   try {
     const job = await Job.findById(jobId)
-      .populate("company", "companyName")
+      .populate("company", "companyName logo")
       .lean();
 
     if (!job) return;

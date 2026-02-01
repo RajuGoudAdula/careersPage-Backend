@@ -103,6 +103,10 @@ export const editJobOfCompany = async (req, res) => {
     Object.assign(job, updates);
     await job.save();
 
+    setImmediate(() => {
+      processJobAlerts(job?._id);
+    });
+
     return res.status(200).json({
       success: true,
       message: "Job updated successfully",
