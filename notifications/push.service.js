@@ -23,8 +23,8 @@ export async function sendBrowserNotification(subscription, job) {
   }
 
   const payload = JSON.stringify({
-    title: `New Job at ${job.company.companyName}`,
-    body: `${job.title} at ${job.company.companyName}`,
+    title: `${job.company.companyName} is Hiring`,
+    body: `New ${job.title} opening — apply now`,
     image: job.company.logo || "/images/job-banner.png", // large image (optional)
     
     data: {
