@@ -23,34 +23,27 @@ export async function sendBrowserNotification(subscription, job) {
   }
 
   const payload = JSON.stringify({
-    title: `New Job at  ${job.companyName}`,
+    title: `New Job at ${job.companyName}`,
     body: `${job.title} at ${job.companyName}`,
     image: job.companyLogo || "/images/job-banner.png", // large image (optional)
     
     data: {
-      url: `${process.env.FRONTEND_URL}/jobs/${job?._id}`,                     // where to open on click
+      url: `${process.env.FRONTEND_URL}/jobs/${job._id}`, // where to open on click
       jobId: job._id,
       companyId: job.companyId,
     },
   
     actions: [
-      {
-        action: "view",
-        title: "View Job",
-      },
-      {
-        action: "save",
-        title: "Save",
-      }
+      { action: "view", title: "View Job" },
+      { action: "save", title: "Save" }
     ],
   
-    tag: `job-${job._id}`,                // prevents duplicate notifications
-    renotify: true,                       // notify again if same tag
-    requireInteraction: true,             // stays until user interacts
-    silent: false,                        // play sound
+    tag: `job-${job._id}`,       // prevents duplicate notifications
+    renotify: true,              // notify again if same tag
+    requireInteraction: true,    // stays until user interacts
+    silent: false,               // play sound
     timestamp: Date.now(),
   });
-  
 
   try {
     await webpush.sendNotification(subscription, payload, {
@@ -58,17 +51,16 @@ export async function sendBrowserNotification(subscription, job) {
       urgency: "high",
     });
 
+    // ✅ Log success
+    console.log(`Push notification sent successfully for job: ${job.title} at ${job.companyName}`);
+
     return { success: true };
   } catch (err) {
     const statusCode = err?.statusCode;
 
     if (statusCode === 410 || statusCode === 404) {
       console.warn("Push subscription expired or invalid");
-      return {
-        success: false,
-        reason: "INVALID_SUBSCRIPTION",
-        shouldDelete: true,
-      };
+      return { success: false, reason: "INVALID_SUBSCRIPTION", shouldDelete: true };
     }
 
     if (statusCode === 401 || statusCode === 403) {
@@ -77,10 +69,6 @@ export async function sendBrowserNotification(subscription, job) {
     }
 
     console.error("Push failed:", err.message);
-    return {
-      success: false,
-      reason: "UNKNOWN_ERROR",
-      error: err.message,
-    };
+    return { success: false, reason: "UNKNOWN_ERROR", error: err.message };
   }
 }
