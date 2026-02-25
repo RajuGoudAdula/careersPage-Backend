@@ -7,7 +7,7 @@ import "./cron/email.cron.js";
 
 import adminRoutes from "./routes/authRoutes.js";
 import jobRoutes from "./routes/jobRoutes.js";
-import companyRoutes from "./routes/companyRoutes.js";
+import organizationRoutes from "./routes/organizationRoutes.js";
 import alertRoutes from "./routes/alertRoutes.js";
 
 dotenv.config();
@@ -23,7 +23,7 @@ connectDB();
 
 app.use("/api/admin", adminRoutes);
 app.use("/api/jobs", jobRoutes);
-app.use("/api/company",companyRoutes);
+app.use("/api/organization",organizationRoutes);
 app.use("/api/alert",alertRoutes);
 
 

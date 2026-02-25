@@ -1,16 +1,67 @@
 import express from "express";
-import { postNewJobOfCompany, editJobOfCompany,deleteJobById, getCompanyJobs, getInputData, getJobs, getJobDetails} from "../controllers/jobController.js";
+import {
+  postNewJob,
+  editJob,
+  deleteJobById,
+  getOrganizationJobs,
+  getInputData,
+  getJobs,
+  getJobDetails,
+  getLatestJobs,
+  getSearchJobs,
+  getJobSuggestions
+} from "../controllers/jobController.js";
+
 import { adminAuth } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-router.post('/:companyId/newJob',adminAuth, postNewJobOfCompany);
-router.put('/:companyId/:jobId', adminAuth ,editJobOfCompany);
-router.delete('/:jobId/company/:id',adminAuth,deleteJobById);
+/* ================= ADMIN ROUTES ================= */
 
-router.get("/:mode/input-data", getInputData);
+// Create job under organization
+router.post(
+  "/:organizationId/newJob",
+  adminAuth,
+  postNewJob
+);
+
+// Edit job
+router.put(
+  "/:organizationId/:jobId",
+  adminAuth,
+  editJob
+);
+
+// Delete job
+router.delete(
+  "/:jobId/organization/:id",
+  adminAuth,
+  deleteJobById
+);
+
+//Get jobs
+router.get('/',adminAuth,getJobs);
+
+
+/* ================= PUBLIC ROUTES ================= */
+
+// Search jobs
 router.get("/search", getJobs);
-router.get('/:companyId',getCompanyJobs);
-router.get("/job/:jobId",getJobDetails);
+
+// Get distinct titles or organizations
+router.get("/input-data/:mode", getInputData);
+
+router.get("/latest",getLatestJobs);
+
+// Get all jobs of one organization
+router.get("/:organizationId", getOrganizationJobs);
+
+router.get("/job/search-jobs",getSearchJobs);
+router.get("/job/job-suggestions",getJobSuggestions);
+
+// Get single job details
+router.get("/job/:jobId", getJobDetails);
+
+
 
 export default router;

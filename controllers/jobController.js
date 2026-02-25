@@ -1,71 +1,88 @@
 import Job from "../models/Job.js";
-import Company from "../models/Company.js";
+import Organization from "../models/Organization.js";
 import dayjs from "dayjs";
 import relativeTime from "dayjs/plugin/relativeTime.js";
 import { triggerN8nJobAutomation } from "../services/n8n.service.js";
 import { processJobAlerts } from "../jobs/job.alert.processor.js";
+
 dayjs.extend(relativeTime);
 
 
-export const postNewJobOfCompany = async (req, res) => {
+export const postNewJob = async (req, res) => {
   try {
-    const { companyId } = req.params;
-    const {
-      title,
-      location,
-      experience,
-      link, 
-      salary,
-      description,
-      jobType,
-    } = req.body;
+    const { organizationId } = req.params;
+    const jobData = { ...req.body };
 
-    // 1️⃣ Validate companyId
-    if (!companyId.match(/^[0-9a-fA-F]{24}$/)) {
+    console.log(organizationId,jobData);
+
+    // Validate ObjectId format
+    if (!organizationId.match(/^[0-9a-fA-F]{24}$/)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid company ID format",
+        message: "Invalid organization ID format",
       });
     }
 
-    // 2️⃣ Check company exists
-    const company = await Company.findById(companyId).lean();
-    if (!company) {
+    // Find organization
+    const organization = await Organization.findById(organizationId);
+
+    if (!organization) {
       return res.status(404).json({
         success: false,
-        message: "Company not found",
+        message: "Organization not found",
       });
     }
 
-    // 3️⃣ Create job (SOURCE OF TRUTH)
-    const newJob = await Job.create({
-      title,
-      location,
-      experience,
-      link,
-      salary,
-      description,
-      jobType,
-      company: companyId,
-      createdBy: req.adminId,
-    });
+    if (organization.status !== "active") {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot post job for inactive organization",
+      });
+    }
 
-    setImmediate(() => {
-      processJobAlerts(newJob?._id);
-    });
+    // 🔥 IMPORTANT FIX
+    const category = (organization.category || "").toLowerCase();
 
-    // 4️⃣ Trigger n8n (NON-BLOCKING SIDE EFFECT)
-    triggerN8nJobAutomation({
-      job: newJob,
-      company,
-    });
+    // Attach organization + category
+    jobData.organization = organizationId;
+    jobData.category = category;
 
-    // 5️⃣ Respond immediately
+    // ✅ Remove tags if not IT
+    if (category !== "it") {
+      jobData.tags = [];
+    }
+
+    // Optional: ensure tags is always array
+    if (!Array.isArray(jobData.tags)) {
+      jobData.tags = [];
+    }
+
+    const newJob = await Job.create(jobData);
+
+    // Update organization stats
+    organization.totalJobs += 1;
+    if (newJob.status === "active") {
+      organization.totalActiveJobs += 1;
+    }
+    await organization.save();
+
+    // setImmediate(() => {
+    //   processJobAlerts(newJob._id);
+    // });
+
+    // triggerN8nJobAutomation({
+    //   job: newJob,
+    //   organization,
+    // });
+
+    console.log("Job created");
+
     return res.status(201).json({
       success: true,
       message: "Job created successfully",
       job: newJob,
     });
+
   } catch (error) {
     console.error("Job creation failed:", error);
     return res.status(500).json({
@@ -76,41 +93,51 @@ export const postNewJobOfCompany = async (req, res) => {
 };
 
 
-export const editJobOfCompany = async (req, res) => {
+export const editJob = async (req, res) => {
   try {
-    const { companyId, jobId } = req.params;
+    const { organizationId, jobId } = req.params;
     const updates = req.body;
 
-    // Validate IDs
-    if (!companyId.match(/^[0-9a-fA-F]{24}$/) || !jobId.match(/^[0-9a-fA-F]{24}$/)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid ID format",
-      });
-    }
-
-    // Find job & ensure it belongs to this company
-    const job = await Job.findOne({ _id: jobId, company: companyId });
+    const job = await Job.findOne({
+      _id: jobId,
+      organization: organizationId,
+    });
 
     if (!job) {
       return res.status(404).json({
         success: false,
-        message: "Job not found for this company",
+        message: "Job not found for this organization",
       });
     }
 
-    // Update job
+    const oldStatus = job.status;
+
     Object.assign(job, updates);
     await job.save();
 
-    setImmediate(() => {
-      processJobAlerts(job?._id);
-    });
+    // Update active stats if status changed
+    if (updates.status) {
+      const organization = await Organization.findById(organizationId);
+
+      if (oldStatus === "active" && updates.status !== "active") {
+        organization.totalActiveJobs -= 1;
+      }
+
+      if (oldStatus !== "active" && updates.status === "active") {
+        organization.totalActiveJobs += 1;
+      }
+
+      await organization.save();
+    }
+
+    // setImmediate(() => {
+    //   processJobAlerts(job._id);
+    // });
 
     return res.status(200).json({
       success: true,
       message: "Job updated successfully",
-      job
+      job,
     });
 
   } catch (err) {
@@ -126,87 +153,69 @@ export const editJobOfCompany = async (req, res) => {
 
 export const deleteJobById = async (req, res) => {
   try {
-    const { jobId, id: companyId } = req.params;
+    const { jobId, id } = req.params;
 
-    // Find the job
     const job = await Job.findById(jobId);
     if (!job) {
       return res.status(404).json({
         success: false,
-        message: "Job not found"
+        message: "Job not found",
       });
     }
 
-    // Check if this job belongs to the given company
-    if (job.company.toString() !== companyId) {
+    if (job.organization.toString() !== id) {
       return res.status(400).json({
         success: false,
-        message: "This job does not belong to this company"
+        message: "This job does not belong to this organization",
       });
     }
 
-    // Delete job
     await Job.findByIdAndDelete(jobId);
+
+    // Update stats
+    const organization = await Organization.findById(id);
+    organization.totalJobs -= 1;
+
+    if (job.status === "active") {
+      organization.totalActiveJobs -= 1;
+    }
+
+    await organization.save();
 
     return res.status(200).json({
       success: true,
-      message: "Job deleted successfully"
+      message: "Job deleted successfully",
     });
 
   } catch (err) {
     console.error("Error deleting job:", err);
     return res.status(500).json({
       success: false,
-      error: err.message
+      error: err.message,
     });
   }
 };
 
 
-
-export const getCompanyJobs = async (req, res) => {
+export const getOrganizationJobs = async (req, res) => {
   try {
-    const { companyId } = req.params;
-    const page = parseInt(req.query.page) || 1;
-    const limit = 10;
-    const skip = (page - 1) * limit;
+    const { organizationId } = req.params;
 
-    // Check if company exists
-    const companyExists = await Company.findById(companyId);
-    if (!companyExists) {
-      return res.status(404).json({ message: "Company not found" });
-    }
+    const jobs = await Job.find({
+      organization: organizationId,
+      status: "active"
+    })
+      .populate("organization", "name logo category")
+      .sort({ createdAt: -1 });
 
-    const totalJobs = await Job.countDocuments({ company: companyId });
-
-    // Fetch jobs with only relevant fields
-    const jobsRaw = await Job.find({ company: companyId })
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .populate("company", "companyName")
-      .select("title location experience jobType salary description link createdAt");
-
-    // Map jobs to remove _id and format createdAt
-    const jobs = jobsRaw.map(job => ({
-      _id: job._id,
-      title: job.title,
-      location: job.location,
-      experience: job.experience,
-      jobType: job.jobType,
-      salary: job.salary,
-      description: job.description,
-      link: job.link,
-      companyName: job.company?.companyName || "",
-      postedOn: dayjs(job.createdAt).fromNow(), // relative time
+    const formattedJobs = jobs.map(job => ({
+      ...job.toObject(),
+      postedOn: dayjs(job.createdAt).fromNow()
     }));
 
-    res.json({
+    res.status(200).json({
       success: true,
-      jobs,
-      totalJobs,
-      currentPage: page,
-      totalPages: Math.ceil(totalJobs / limit),
+      jobs: formattedJobs
     });
 
   } catch (err) {
@@ -215,126 +224,392 @@ export const getCompanyJobs = async (req, res) => {
 };
 
 
+
 export const getInputData = async (req, res) => {
   try {
-    const {mode} = req.params;
-    let data;
-    if(mode === "title"){
-      data = await Job.distinct("title");
-    }else if(mode === "company"){
-      data = await Company.distinct("companyName");
+    const { mode } = req.params;
+
+    let data = [];
+
+    if (mode === "title") {
+      data = await Job.distinct("title", { status: "active" });
+    } 
+    else if (mode === "organization") {
+      data = await Organization.distinct("name", { status: "active" });
+    } 
+    else if (mode === "state") {
+      data = await Job.distinct("location.state", { status: "active" });
+    } 
+    else if (mode === "category") {
+      data = await Organization.distinct("category", { status: "active" });
+    } 
+    else {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid mode. Use title | organization | state | category",
+      });
     }
-    res.status(200).json(data);
+
+    res.status(200).json({
+      success: true,
+      count: data.length,
+      data,
+    });
+
   } catch (err) {
-    res.status(500).json({ message: "Failed to fetch titles" });
+    console.error("Error fetching input data:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch input data",
+    });
   }
 };
 
 
 export const getJobs = async (req, res) => {
   try {
-    const { title, company, page = 1, limit = 10 } = req.query;
+    // ===== Query Params =====
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 9;
+    const category = req.query.category; // government / it
+    const search = req.query.search;
+    const status = req.query.status || "active";
 
     const skip = (page - 1) * limit;
 
-    /* ---------------------------------
-       SEARCH BY JOB TITLE
-    ----------------------------------*/
-    if (title) {
-      const [jobs, total] = await Promise.all([
-        Job.find({
-          title: { $regex: `^${title}$`, $options: "i" }
-        })
-          .populate("company")
-          .skip(skip)
-          .limit(Number(limit))
-          .sort({ createdAt: -1 }),
+    // ===== Build Filter =====
+    const filter = { status };
 
-        Job.countDocuments({
-          title: { $regex: `^${title}$`, $options: "i" }
-        })
-      ]);
-
-      const formattedJobs = jobs.map(job => ({
-        ...job.toObject(),
-        postedOn: dayjs(job.createdAt).fromNow()
-      }));
-
-      return res.status(200).json({
-        mode: "title",
-        total,
-        page: Number(page),
-        totalPages: Math.ceil(total / limit),
-        jobs: formattedJobs
-      });
+    if (category) {
+      filter.category = category;
     }
 
-    /* ---------------------------------
-       SEARCH BY COMPANY
-    ----------------------------------*/
-    if (company) {
-      // Find company details
-      const companyData = await Company.findOne({
-        companyName: { $regex: `^${company}$`, $options: "i" }
-      });
-
-      if (!companyData) {
-        return res.status(404).json({ message: "Company not found" });
-      }
-
-      const [jobs, total] = await Promise.all([
-        Job.find({ company: companyData._id })
-          .skip(skip)
-          .limit(Number(limit))
-          .sort({ createdAt: -1 }),
-
-        Job.countDocuments({ company: companyData._id })
-      ]);
-
-      const formattedJobs = jobs.map(job => ({
-        ...job.toObject(),
-        postedOn: dayjs(job.createdAt).fromNow()
-      }));
-
-      return res.status(200).json({
-        mode: "company",
-        company: companyData,
-        total,
-        page: Number(page),
-        totalPages: Math.ceil(total / limit),
-        jobs: formattedJobs
-      });
+    if (search) {
+      filter.$text = { $search: search };
     }
 
-    /* ---------------------------------
-       INVALID REQUEST
-    ----------------------------------*/
-    return res.status(400).json({
-      message: "Either title or company query is required"
+    // ===== Fetch Jobs =====
+    const jobs = await Job.find(filter)
+      .populate({
+        path: "organization",
+        select: "name logo favicon slug website category"
+      })
+      .sort({ postedDate: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    // ===== Total Count =====
+    const totalJobs = await Job.countDocuments(filter);
+
+    res.status(200).json({
+      success: true,
+      page,
+      totalPages: Math.ceil(totalJobs / limit),
+      totalJobs,
+      jobs
     });
 
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Search failed" });
+  } catch (error) {
+    console.error("Get Jobs Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch jobs"
+    });
   }
 };
+
+
+
 
 export const getJobDetails = async (req, res) => {
   const { jobId } = req.params;
 
   try {
-    
+    // Validate ObjectId format
+    if (!jobId.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid job ID format",
+      });
+    }
+
     const job = await Job.findById(jobId)
-      .populate("company", "companyName logo") 
+      .populate({
+        path: "organization",
+        select: "name logo slug category website",
+      })
       .exec();
 
     if (!job) {
-      return res.status(404).json({ message: "Job not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Job not found",
+      });
     }
 
-    res.status(200).json(job);
+    // Optional: auto increase views
+    job.views += 1;
+    await job.save();
+
+    return res.status(200).json({
+      success: true,
+      job,
+    });
+
   } catch (err) {
     console.error("Error fetching job details:", err);
-    res.status(500).json({ message: "Server error" });
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
+
+
+export const getLatestJobs = async (req, res) => {
+  try {
+    const today = new Date();
+
+    const jobs = await Job.find()
+    .sort({ createdAt: -1 })
+    .limit(10)
+    .populate("organization", "name logo favicon slug website category")
+    .select("-__v");
+
+    res.status(200).json({
+      success: true,
+      count: jobs.length,
+      data: jobs,
+    });
+  } catch (error) {
+    console.error("Get Latest Jobs Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch latest jobs",
+    });
+  }
+};
+
+
+
+/* ================= GET SEARCH JOBS ================= */
+export const getSearchJobs = async (req, res) => {
+  try {
+    const {
+      category,
+      search,
+      location,
+      experience,
+      qualification,
+      page = 1,
+      limit = 20,
+    } = req.query;
+
+    const pageNum = parseInt(page) || 1;
+    const limitNum = parseInt(limit) || 20;
+    const skip = (pageNum - 1) * limitNum;
+
+    const pipeline = [];
+
+    // ✅ 1️⃣ TEXT SEARCH MUST BE FIRST
+    if (search) {
+      pipeline.push({
+        $match: { $text: { $search: search } },
+      });
+    }
+
+    // ✅ 2️⃣ Base filter
+    pipeline.push({
+      $match: { status: "active" },
+    });
+
+    // ✅ 3️⃣ Lookup organization
+    pipeline.push({
+      $lookup: {
+        from: "organizations",
+        localField: "organization",
+        foreignField: "_id",
+        as: "organization",
+      },
+    });
+
+    pipeline.push({ $unwind: "$organization" });
+
+    // ✅ 4️⃣ Category filter
+    if (category) {
+      pipeline.push({
+        $match: {
+          "organization.category": category.toLowerCase(),
+        },
+      });
+    }
+
+    // ✅ 5️⃣ Other filters
+    if (location) {
+      pipeline.push({
+        $match: {
+          $or: [
+            { "location.state": { $regex: location, $options: "i" } },
+            { "location.city": { $regex: location, $options: "i" } }
+          ]
+        }
+      });
+    }
+
+    if (experience) {
+      if (experience === "Fresher") {
+        pipeline.push({
+          $match: {
+            minExperience: 0,
+            maxExperience: 0,
+          },
+        });
+      } else {
+        const [min, max] = experience
+          .replace(" years", "")
+          .split("-")
+          .map(Number);
+    
+        pipeline.push({
+          $match: {
+            minExperience: { $lte: max },
+            maxExperience: { $gte: min },
+          },
+        });
+      }
+    }
+
+    if (qualification) {
+      pipeline.push({
+        $match: { qualificationText: qualification },
+      });
+    }
+
+    // ✅ 6️⃣ Sort
+    pipeline.push({ $sort: { postedDate: -1 } });
+
+    // ✅ 7️⃣ Pagination
+    pipeline.push({ $skip: skip });
+    pipeline.push({ $limit: limitNum });
+
+    const jobs = await Job.aggregate(pipeline);
+
+    // ✅ COUNT PIPELINE (without skip & limit)
+    const countPipeline = pipeline.filter(
+      (stage) => !stage.$skip && !stage.$limit
+    );
+
+    countPipeline.push({ $count: "total" });
+
+    const countResult = await Job.aggregate(countPipeline);
+    const total = countResult[0]?.total || 0;
+
+    return res.json({
+      success: true,
+      page: pageNum,
+      limit: limitNum,
+      total,
+      jobs,
+    });
+
+  } catch (err) {
+    console.error("Error in getSearchJobs:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Server Error",
+      error: err.message,
+    });
+  }
+};
+
+/* ================= GET JOB SUGGESTIONS ================= */
+export const getJobSuggestions = async (req, res) => {
+  try {
+    const { category, search = "", limit = 10 } = req.query;
+
+    const limitNum = Math.min(50, parseInt(limit) || 10);
+
+    // Escape special regex characters (important!)
+    const escapeRegex = (text) =>
+      text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+    const pipeline = [];
+
+    /* ✅ 1. Active jobs only */
+    pipeline.push({
+      $match: { status: "active" },
+    });
+
+    /* ✅ 2. Title partial match */
+    if (search && search.trim() !== "") {
+      pipeline.push({
+        $match: {
+          title: {
+            $regex: escapeRegex(search.trim()),
+            $options: "i",
+          },
+        },
+      });
+    }
+
+    /* ✅ 3. Lookup organization */
+    pipeline.push({
+      $lookup: {
+        from: "organizations",
+        localField: "organization",
+        foreignField: "_id",
+        as: "organization",
+      },
+    });
+
+    pipeline.push({
+      $unwind: {
+        path: "$organization",
+        preserveNullAndEmptyArrays: false,
+      },
+    });
+
+    /* ✅ 4. Category filter (CASE INSENSITIVE SAFE) */
+    if (category && category.trim() !== "") {
+      pipeline.push({
+        $match: {
+          "organization.category": {
+            $regex: `^${escapeRegex(category.trim())}$`,
+            $options: "i",
+          },
+        },
+      });
+    }
+
+    /* ✅ 5. Sort + Limit */
+    pipeline.push(
+      { $sort: { postedDate: -1 } },
+      { $limit: limitNum }
+    );
+
+    /* ✅ 6. Return autosuggest format */
+    pipeline.push({
+      $project: {
+        _id: 1,
+        label: "$title",   // shown in dropdown
+        value: "$slug",    // used if needed
+      },
+    });
+
+    const suggestions = await Job.aggregate(pipeline);
+
+    return res.json({
+      success: true,
+      suggestions,
+    });
+
+  } catch (err) {
+    console.error("getJobSuggestions error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Server Error",
+      error: err.message,
+    });
   }
 };
